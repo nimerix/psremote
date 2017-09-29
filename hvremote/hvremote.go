@@ -261,14 +261,8 @@ Remove-VMDvdDrive -VMName $vmName -ControllerNumber $controllerNumber -Controlle
 func (hvc *HyperVCmd) GetVirtualMachineId(params map[string]string) (string, error) {
 	var script = `
 [string]$vmName = $using:vmName
-[string]$vmId = $using:vmID
 
-if ($vmName) {
-	$VM = Get-VM -Name $vmName | Select-Object -first 1
-}
-else {
-	$VM = Get-VM -Id $vmId | Select-Object -first 1
-}
+$VM = Get-VM -Name $vmName | Select-Object -first 1
 
 if ($VM) {
 	$VM.Id.Guid
