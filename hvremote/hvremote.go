@@ -271,7 +271,7 @@ else {
 }
 
 if ($VM) {
-	$VM.Id
+	$VM.Id.Guid
 }
 `
 
