@@ -6,19 +6,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/flynnhandley/psremote"
+	"common/psremote"
 )
 
-type HyperVCmd struct {
+type HypervRemote struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
-	Ps      *psremote.PowerShellCmd
+	Ps      *psremote.PSRemote
 	Session string
 }
 
-func NewHyperVCmd(userName, password, computerName string) (*HyperVCmd, error) {
-	ps, _ := psremote.NewPowerShellCmd(userName, password, computerName)
-	cmd := &HyperVCmd{
+func NewHypervRemote(userName, password, computerName string, useSSL bool) (*HypervRemote, error) {
+	ps, _ := psremote.NewPSRemote(userName, password, computerName, useSSL)
+	hvremote := &HypervRemote{
 		Session: `$secpasswd = ConvertTo-SecureString "` + password + `" -AsPlainText -Force
 	$creds = New-Object System.Management.Automation.PSCredential ("` + userName + `", $secpasswd)
 	$Session = New-PsSession -Computername "` + computerName + `" -credential $creds
@@ -26,22 +26,22 @@ func NewHyperVCmd(userName, password, computerName string) (*HyperVCmd, error) {
 		Ps: ps,
 	}
 
-	return cmd, nil
+	return hvremote, nil
 }
 
-func (hvc *HyperVCmd) InvokeCommand(scriptBlock string, params map[string]string) (string, error) {
+func (hvc *HypervRemote) InvokeCommand(scriptBlock string, params map[string]string) (string, error) {
 
 	cmdOut, err := hvc.Ps.OutputWinRm(scriptBlock, params)
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) TestConnectivity() error {
+func (hvc *HypervRemote) TestConnectivity() error {
 	_, err := hvc.Ps.OutputWinRm("", nil)
 	return err
 }
 
 // PutFile sends a file to a remote host via pssession
-func (hvc *HyperVCmd) PutFile(source, dest string) error {
+func (hvc *HypervRemote) PutFile(source, dest string) error {
 
 	var script = hvc.Session + `Copy-Item -Path ` + source + ` -Destination ` + dest + ` -ToSession $Session`
 
@@ -51,7 +51,7 @@ func (hvc *HyperVCmd) PutFile(source, dest string) error {
 }
 
 // GetFile returns a file from a remote host via pssession
-func (hvc *HyperVCmd) GetFile(source, dest string) error {
+func (hvc *HypervRemote) GetFile(source, dest string) error {
 
 	var script = ``
 	params := map[string]string{"source": source, "dest": dest}
@@ -59,7 +59,7 @@ func (hvc *HyperVCmd) GetFile(source, dest string) error {
 	return err
 }
 
-func (hvc *HyperVCmd) Hash(path, algorithm string) (string, error) {
+func (hvc *HypervRemote) Hash(path, algorithm string) (string, error) {
 	var script = `
 $path = $using:path
 $algorithm = $using:algorithm
@@ -75,7 +75,7 @@ return (Get-FileHash -Path $Path -Algorith $algorithm).hash
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) Download(source, dest, hash, algorithm string) (string, error) {
+func (hvc *HypervRemote) Download(source, dest, hash, algorithm string) (string, error) {
 	var script = `
 	$source = $using:source
 	$dest = $using:dest
@@ -88,7 +88,7 @@ func (hvc *HyperVCmd) Download(source, dest, hash, algorithm string) (string, er
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) GetHostAdapterIpAddressForSwitch(switchName string) (string, error) {
+func (hvc *HypervRemote) GetHostAdapterIpAddressForSwitch(switchName string) (string, error) {
 	var script = `
 $switchName = $using:switchName
 $HostVMAdapter = Get-VMNetworkAdapter -ManagementOS -SwitchName $switchName
@@ -110,13 +110,15 @@ return $false
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) GetVirtualMachineNetworkAdapterAddress(vmName string) (string, error) {
+func (hvc *HypervRemote) GetVirtualMachineNetworkAdapterAddress(vmName, adapterName string) (string, error) {
 
 	var script = `
 $vmName = $using:vmName
+$adapterName = $using:adapterName
 $addressIndex = $using:addressIndex
 try {
-  $adapter = Get-VMNetworkAdapter -VMName $vmName -Name "Network Adapter" -ErrorAction SilentlyContinue
+	Start-Sleep 20
+  $adapter = Get-VMNetworkAdapter -VMName $vmName -Name "$adapterName"
   $ip = $adapter.IPAddresses[$addressIndex]
   if($ip -eq $null) {
     return
@@ -127,13 +129,13 @@ try {
 $ip
 `
 
-	params := map[string]string{"vmName": vmName, "addressIndex": "0"}
+	params := map[string]string{"vmName": vmName, "adapterName": adapterName, "addressIndex": "0"}
 	cmdOut, err := hvc.Ps.OutputWinRm(script, params)
 
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) CreateDvdDrive(vmName string, isoPath string, generation uint) (uint, uint, error) {
+func (hvc *HypervRemote) CreateDvdDrive(vmName string, isoPath string, generation uint) (uint, uint, error) {
 
 	var script = `
 $vmName = $using:vmName
@@ -171,7 +173,7 @@ $result
 	return controllerNumber, controllerLocation, err
 }
 
-func (hvc *HyperVCmd) MountDvdDrive(vmName string, path string, controllerNumber uint, controllerLocation uint) error {
+func (hvc *HypervRemote) MountDvdDrive(vmName string, path string, controllerNumber uint, controllerLocation uint) error {
 
 	var script = `
 $vmName = $using:vmName
@@ -193,7 +195,7 @@ Set-VMDvdDrive -VMName $vmName -ControllerNumber $controllerNumber -ControllerLo
 	return err
 }
 
-func (hvc *HyperVCmd) UnmountDvdDrive(vmName string, controllerNumber uint, controllerLocation uint) error {
+func (hvc *HypervRemote) UnmountDvdDrive(vmName string, controllerNumber uint, controllerLocation uint) error {
 	var script = `
 $vmName = $using:vmName
 $controllerNumber = $using:controllerNumber
@@ -211,7 +213,7 @@ Set-VMDvdDrive -VMName $vmName -ControllerNumber $controllerNumber -ControllerLo
 	return err
 }
 
-func (hvc *HyperVCmd) SetBootDvdDrive(vmName string, controllerNumber uint, controllerLocation uint, generation uint) error {
+func (hvc *HypervRemote) SetBootDvdDrive(vmName string, controllerNumber uint, controllerLocation uint, generation uint) error {
 
 	if generation < 2 {
 		script := `
@@ -241,7 +243,7 @@ Set-VMFirmware -VMName $vmName -FirstBootDevice $vmDvdDrive -ErrorAction Silentl
 	}
 }
 
-func (hvc *HyperVCmd) DeleteDvdDrive(vmName string, controllerNumber uint, controllerLocation uint) error {
+func (hvc *HypervRemote) DeleteDvdDrive(vmName string, controllerNumber uint, controllerLocation uint) error {
 	var script = `
 [string]$vmName = $using:vmName
 [int]$controllerNumber = $using:controllerNumber
@@ -258,11 +260,11 @@ Remove-VMDvdDrive -VMName $vmName -ControllerNumber $controllerNumber -Controlle
 	return err
 }
 
-func (hvc *HyperVCmd) GetVirtualMachineId(params map[string]string) (string, error) {
+func (hvc *HypervRemote) GetVirtualMachineId(params map[string]string) (string, error) {
 	var script = `
 [string]$vmName = $using:vmName
 
-$VM = Get-VM -Name $vmName | Select-Object -first 1
+$VM = Get-VM -Name $vmName -ErrorAction SilentlyContinue | Select-Object -first 1
 
 if ($VM) {
 	$VM.Id.Guid
@@ -273,7 +275,7 @@ if ($VM) {
 	return Output, err
 }
 
-func (hvc *HyperVCmd) GetVirtualSwitchId(params map[string]string) (string, error) {
+func (hvc *HypervRemote) GetVirtualSwitchId(params map[string]string) (string, error) {
 	var script = `
 [string]$Name = $using:Name
 [string]$Id = $using:ID
@@ -294,7 +296,7 @@ if ($SW) {
 	return Output, err
 }
 
-func (hvc *HyperVCmd) DeleteAllDvdDrives(vmName string) error {
+func (hvc *HypervRemote) DeleteAllDvdDrives(vmName string) error {
 	var script = `
 [string]$vmName = $using:vmName
 Get-VMDvdDrive -VMName $vmName | Remove-VMDvdDrive
@@ -305,7 +307,7 @@ Get-VMDvdDrive -VMName $vmName | Remove-VMDvdDrive
 	return err
 }
 
-func (hvc *HyperVCmd) MountFloppyDrive(vmName string, path string) error {
+func (hvc *HypervRemote) MountFloppyDrive(vmName string, path string) error {
 	var script = `
 [string]$vmName = $using:vmName
 [string]$path = $using:path
@@ -317,7 +319,7 @@ Set-VMFloppyDiskDrive -VMName $vmName -Path $path
 	return err
 }
 
-func (hvc *HyperVCmd) UnmountFloppyDrive(vmName string) error {
+func (hvc *HypervRemote) UnmountFloppyDrive(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -329,14 +331,14 @@ func (hvc *HyperVCmd) UnmountFloppyDrive(vmName string) error {
 	return err
 }
 
-func (hvc *HyperVCmd) NewVhd(vmID, vhdName string, diskSize int64) (string, error) {
+func (hvc *HypervRemote) NewVhd(vmID, vhdName string, diskSize int64) (string, error) {
 
 	var script = `
 		[string]$vhdName = $using:vhdName
 		[long]$newVHDSizeBytes = $using:diskSize
 		[string]$vmID = $using:vmID
 
-		$VM = Get-VM -Id $vmID | select -first 1
+		$VM = Get-VM -Id $vmID -ErrorAction SilentlyContinue | select -first 1
 		if(!$VM){Write-Error "Creating VHD for VM ID: $vmID, cannot find VM; return"}
 
 		$vhdx = $vhdName + '.vhdx'
@@ -347,36 +349,93 @@ func (hvc *HyperVCmd) NewVhd(vmID, vhdName string, diskSize int64) (string, erro
 		`
 	params := map[string]string{
 		"vmID":     vmID,
-		"name":     vhdName,
+		"vhdName":  vhdName,
 		"diskSize": strconv.FormatInt(diskSize, 10),
 	}
 	return hvc.Ps.OutputWinRm(script, params)
 }
 
-func (hvc *HyperVCmd) AttachBootVHD(vmID, source string) (string, error) {
+func (hvc *HypervRemote) NewDiskFromImagePath(vmID, vhdName, imagePath string) (string, error) {
 
 	var script = `
+	[string]$vhdName = $using:vhdName
+	[string]$imagePath = $using:imagePath
 	[string]$vmID = $using:vmID
-	[string]$Source = $using:source
-	$VM = Get-VM -Id $vmID | select -first 1
+
+	$VM = Get-VM -Id $vmID -ErrorAction SilentlyContinue | select -first 1
 	if(!$VM){Write-Error "Creating VHD for VM ID: $vmID, cannot find VM; return"}
 
-	$vhdx = $VM.Id.Guid + ".vhdx"
+	$vhdx = $vhdName + '.vhdx'
 	$vhdPath = Join-Path -Path $VM.ConfigurationLocation -ChildPath $vhdx
 
-	(New-Object System.Net.WebClient).DownloadFile($Source, $vhdPath)
+	if(Test-Path $imagePath){Write-Host "Cannot find VHD Image: $imagePath"}
+	Copy-Item $imagePath $vhdPath
+
 	Add-VMHardDiskDrive -VM $VM -Path $vhdPath
 	`
+	params := map[string]string{
+		"vmID":      vmID,
+		"vhdName":   vhdName,
+		"imagePath": imagePath,
+	}
+	return hvc.Ps.OutputWinRm(script, params)
+}
+
+func (hvc *HypervRemote) NewDiskFromImageURL(vmID, vhdName, imageURL string) (string, error) {
+
+	var script = `
+			[string]$vmID = $using:vmID
+			[string]$imageURL = $using:imageURL
+			[string]$vhdName = $using:vhdName
+			$VM = Get-VM -Id $vmID | select -first 1
+			if(!$VM){Write-Error "Creating VHD for VM ID: $vmID, cannot find VM; return"}
+
+			$vhdx = $vhdName + ".vhdx"
+			$vhdPath = Join-Path -Path $VM.ConfigurationLocation -ChildPath $vhdx
+
+			(New-Object System.Net.WebClient).DownloadFile($imageURL, $vhdPath)
+			Add-VMHardDiskDrive -VM $VM -Path $vhdPath
+			`
 
 	params := map[string]string{
-		"vmID":   vmID,
-		"source": source,
+		"vmID":     vmID,
+		"imageURL": imageURL,
+		"vhdName":  vhdName,
 	}
 
 	return hvc.Ps.OutputWinRm(script, params)
 }
 
-func (hvc *HyperVCmd) CreateVirtualMachine(vmName, path string, ramMB int64, switchName string, generation int) (string, error) {
+func (hvc *HypervRemote) NewDifferencingDisk(vmID, vhdName, diffParentPath string) (string, error) {
+
+	var script = `
+	[string]$vhdName = $using:vhdName
+	[string]$diffParentPath = $using:diffParentPath
+	[string]$vmID = $using:vmID
+
+	if(Test-Path $diffParentPath){Write-Host "Cannot find Differencing VHD Image: $diffParentPath"}
+
+	$VM = Get-VM -Id $vmID -ErrorAction SilentlyContinue | select -first 1
+	if(!$VM){Write-Error "Creating VHD for VM ID: $vmID, cannot find VM; return"}
+
+	$vhdx = $vhdName + '.vhdx'
+
+	$vhdPath = Join-Path -Path $VM.ConfigurationLocation -ChildPath $vhdx
+
+	$VHD = New-VHD -Path $vhdpath -ParentPath $diffParentPath -Differencing
+	Add-VMHardDiskDrive -VM $VM -Path $VHD.Path
+	`
+	params := map[string]string{
+		"vmID":           vmID,
+		"vhdName":        vhdName,
+		"diffParentPath": diffParentPath,
+	}
+	return hvc.Ps.OutputWinRm(script, params)
+
+	return hvc.Ps.OutputWinRm(script, params)
+}
+
+func (hvc *HypervRemote) CreateVirtualMachine(vmName, path string, ramMB int64, switchName string, generation int) (string, error) {
 
 	if generation == 2 {
 		var script = `
@@ -385,7 +444,7 @@ func (hvc *HyperVCmd) CreateVirtualMachine(vmName, path string, ramMB int64, swi
 [long]$memoryStartupBytes = $using:ram
 [string]$switchName = $using:switchName
 [int]$generation = $using:generation
-$VM = New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -SwitchName $switchName -Generation $generation
+$VM = New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -Generation $generation -SwitchName $switchName
 $VM.Id.Guid
 `
 
@@ -403,7 +462,7 @@ $VM.Id.Guid
 [string]$path = $using:path
 [long]$memoryStartupBytes = $using:ram
 [string]$switchName = $using:switchName
-$VM = New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -SwitchName $switchName
+$VM = New-VM -Name $vmName -Path $path -MemoryStartupBytes $memoryStartupBytes -SwitchName $switchName -BootDevice IDE
 $VM.Id.Guid
 `
 		params := map[string]string{"vmName": vmName,
@@ -415,7 +474,7 @@ $VM.Id.Guid
 	}
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineCpuCount(vmId string, cpu int) error {
+func (hvc *HypervRemote) SetVirtualMachineCpuCount(vmId string, cpu int) error {
 
 	var script = `
 	[string]$vmId = $using:vmId
@@ -429,7 +488,7 @@ Set-VMProcessor -VM $VM -Count $cpu
 	return err
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineVirtualizationExtensions(vmName string, enableVirtualizationExtensions bool) error {
+func (hvc *HypervRemote) SetVirtualMachineVirtualizationExtensions(vmName string, enableVirtualizationExtensions bool) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -447,7 +506,7 @@ Set-VMProcessor -VMName $vmName -ExposeVirtualizationExtensions $exposeVirtualiz
 	return err
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineDynamicMemory(vmName string, enableDynamicMemory bool) error {
+func (hvc *HypervRemote) SetVirtualMachineDynamicMemory(vmName string, enableDynamicMemory bool) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -464,7 +523,7 @@ Set-VMMemory -VMName $vmName -DynamicMemoryEnabled $enableDynamicMemory
 	return err
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineMacSpoofing(vmName string, enableMacSpoofing bool) error {
+func (hvc *HypervRemote) SetVirtualMachineMacSpoofing(vmName string, enableMacSpoofing bool) error {
 	var script = `
 	[string]$vmName = $using:vmName
 	$enableMacSpoofing = $using:enableMacSpoofing
@@ -481,7 +540,7 @@ Set-VMNetworkAdapter -VMName $vmName -MacAddressSpoofing $enableMacSpoofing
 	return err
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineSecureBoot(vmName string, enableSecureBoot bool) error {
+func (hvc *HypervRemote) SetVirtualMachineSecureBoot(vmName string, enableSecureBoot bool) error {
 	var script = `
 	[string]$vmName = $using:vmName
 	$enableSecureBoot = $using:enableSecureBoot
@@ -497,7 +556,23 @@ Set-VMFirmware -VMName $vmName -EnableSecureBoot $enableSecureBoot
 	return err
 }
 
-func (hvc *HyperVCmd) DeleteVirtualMachine(vmId string) error {
+func (hvc *HypervRemote) DisableNetworkBoot(vmID string) error {
+	var script = `
+	[string]$vmID = $using:vmID
+
+	$VM = Get-VM -Id $vmID -ErrorAction SilentlyContinue | select -first 1
+	if(!$VM){Write-Error "Creating VHD for VM ID: $vmID, cannot find VM; return"}
+	$old_boot_order = Get-VMFirmware -VMName $VM.Name | Select-Object -ExpandProperty BootOrder
+	$new_boot_order = $old_boot_order | Where-Object { $_.BootType -ne "Network" }
+	Set-VMFirmware -VMName $VM.Name -BootOrder $new_boot_order
+`
+
+	params := map[string]string{"vmID": vmID}
+	_, err := hvc.Ps.OutputWinRm(script, params)
+	return err
+}
+
+func (hvc *HypervRemote) DeleteVirtualMachine(vmId string) error {
 
 	var script = `
 [string]$vmId = $using:vmId
@@ -509,13 +584,15 @@ if (($vm.State -ne [Microsoft.HyperV.PowerShell.VMState]::Off) -and ($vm.State -
 }
 
 Remove-VM -VM $vm -Force -Confirm:$false
+Start-Sleep 2
+Remove-Item $VM.ConfigurationLocation -recurse -force
 `
 	params := map[string]string{"vmId": vmId}
 	_, err := hvc.Ps.OutputWinRm(script, params)
 	return err
 }
 
-func (hvc *HyperVCmd) ExportVirtualMachine(vmName string, path string) error {
+func (hvc *HypervRemote) ExportVirtualMachine(vmName string, path string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -620,7 +697,7 @@ if (Test-Path -Path ([IO.Path]::Combine($path, $vmName, 'Virtual Machines', '*.V
 	return err
 }
 
-func (hvc *HyperVCmd) CompactDisks(expPath string, vhdDir string) error {
+func (hvc *HypervRemote) CompactDisks(expPath string, vhdDir string) error {
 	var script = `
 	[string]$srcPath = $using:srcPath
 	[string]$vhdDirName = $using:vhdDirName
@@ -633,7 +710,7 @@ Get-ChildItem "$srcPath/$vhdDirName" -Filter *.vhd* | %{
 	return err
 }
 
-func (hvc *HyperVCmd) CopyExportedVirtualMachine(expPath string, outputPath string, vhdDir string, vmDir string) error {
+func (hvc *HypervRemote) CopyExportedVirtualMachine(expPath string, outputPath string, vhdDir string, vmDir string) error {
 
 	var script = `
 	[string]$srcPath = $using:srcPath
@@ -649,7 +726,7 @@ Move-Item -Path $srcPath/$vmDir -Destination $dstPath
 	return err
 }
 
-func (hvc *HyperVCmd) CreateVirtualSwitch(switchName string, switchType string) (string, error) {
+func (hvc *HypervRemote) CreateVirtualSwitch(switchName string, switchType string) (string, error) {
 
 	var script = `
 [string]$switchName = $using:switchName
@@ -666,7 +743,7 @@ if ($switches.Count -eq 0) {
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) AddVMNetworkAdapter(vmId, name, switchName, vlanId string) error {
+func (hvc *HypervRemote) AddVMNetworkAdapter(vmId, name, switchName, vlanId string) error {
 
 	var script = `
 	[string]$name = $using:name
@@ -675,10 +752,13 @@ func (hvc *HyperVCmd) AddVMNetworkAdapter(vmId, name, switchName, vlanId string)
 	[string]$vmId = $using:vmId
 	$VM = Get-VM -Id $vmID
 
-	$Name = $name + "_" + $VM.Id.Guid
-
 	if(!$VM){Write-Error "Could not get VM: $VM"}
 	$VM | Add-VMNetworkAdapter -Name "$name" -SwitchName "$switchName"
+
+	# Set the boot order to disable pxe
+	$OldBootOrder = Get-VMFirmware -vm $vm | Select-Object -ExpandProperty BootOrder
+	$NewBootOorder = $OldBootOrder  | Where-Object { $_.BootType -ne "Network" }
+	Set-VMFirmware -vm $VM -BootOrder $NewBootOorder
 
 	if(($vlanId -ne $null) -and ($vlanId -ne "")){
 		Set-VMNetworkAdapterVlan -VMNetworkAdapterName "$name" -Access -VlanId $vlanId -VMName $VM.Name
@@ -690,14 +770,19 @@ func (hvc *HyperVCmd) AddVMNetworkAdapter(vmId, name, switchName, vlanId string)
 	return err
 }
 
-func (hvc *HyperVCmd) DeleteVirtualSwitch(switchId string) error {
+func (hvc *HypervRemote) DeleteVirtualSwitch(switchId string) error {
 
 	var script = `
 	[string]$switchId = $using:switchId
-$switch = Get-VMSwitch -Id $switchId -ErrorAction SilentlyContinue
-if ($switch -ne $null) {
-    $switch | Remove-VMSwitch -Force -Confirm:$false
-}
+	# Terraform deletes resources concurrently, so lets try five times over ~25 seconds to make sure all VM's are deleted
+	for ($i = 0; ($i -lt 5) -and (Get-VMSwitch -Id $switchId -ErrorAction SilentlyContinue); $i++) {
+		Get-VMSwitch -Id $switchId -ErrorAction SilentlyContinue | Remove-VMSwitch -Force -Confirm:$false -ErrorAction SilentlyContinue
+		Start-Sleep 5
+	}
+
+	if(Get-VMSwitch -Id $switchId -ErrorAction SilentlyContinue){
+		Write-Error "Unable to delete switch after five attempts, ensure that no virtual machines are connected to it"
+	}
 `
 
 	params := map[string]string{"switchId": switchId}
@@ -705,7 +790,7 @@ if ($switch -ne $null) {
 	return err
 }
 
-func (hvc *HyperVCmd) StartVirtualMachine(vmName string) error {
+func (hvc *HypervRemote) StartVirtualMachine(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -720,7 +805,7 @@ if ($vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Off) {
 	return err
 }
 
-func (hvc *HyperVCmd) RestartVirtualMachine(vmName string) error {
+func (hvc *HypervRemote) RestartVirtualMachine(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -732,7 +817,7 @@ Restart-VM $vmName -Force -Confirm:$false
 	return err
 }
 
-func (hvc *HyperVCmd) StopVirtualMachine(vmName string) error {
+func (hvc *HypervRemote) StopVirtualMachine(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -747,7 +832,7 @@ if ($vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Running) {
 	return err
 }
 
-func (hvc *HyperVCmd) EnableVirtualMachineIntegrationService(vmName string, integrationServiceName string) error {
+func (hvc *HypervRemote) EnableVirtualMachineIntegrationService(vmName string, integrationServiceName string) error {
 
 	integrationServiceId := ""
 	switch integrationServiceName {
@@ -778,7 +863,7 @@ Get-VMIntegrationService -VmName $vmName | ?{$_.Id -match $integrationServiceId}
 	return err
 }
 
-func (hvc *HyperVCmd) SetNetworkAdapterVlanId(switchName string, vlanId string) error {
+func (hvc *HypervRemote) SetNetworkAdapterVlanId(switchName string, vlanId string) error {
 
 	var script = `
 	[string]$networkAdapterName = $using:networkAdapterName
@@ -791,7 +876,21 @@ Set-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $networkAdapterName
 	return err
 }
 
-func (hvc *HyperVCmd) SetVirtualMachineVlanId(vmID string, vlanId string) error {
+func (hvc *HypervRemote) SetNetworkAdapterStaticMacAddress(vmName, adapterName, mac string) error {
+
+	var script = `
+		[string]$vmName = $using:vmName
+		[string]$vmName = $using:vmName
+		[string]$mac = $using:mac
+		Set-VMNetworkAdapter -VmName $vmName -VMNetworkAdapterName $adapterName -StaticMacAddress $mac
+	`
+
+	params := map[string]string{"vmName": vmName, "adapterName": adapterName, "mac": mac}
+	_, err := hvc.Ps.OutputWinRm(script, params)
+	return err
+}
+
+func (hvc *HypervRemote) SetVirtualMachineVlanId(vmID string, vlanId string) error {
 
 	var script = `
 [string]$vmID = $using:vmID
@@ -804,7 +903,7 @@ Set-VMNetworkAdapterVlan -VMName $VM.Name -Access -VlanId $vlanId
 	return err
 }
 
-func (hvc *HyperVCmd) GetExternalOnlineVirtualSwitch() (string, error) {
+func (hvc *HypervRemote) GetExternalOnlineVirtualSwitch() (string, error) {
 
 	var script = `
 	$adapters = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | Sort-Object -Descending -Property Speed
@@ -826,7 +925,7 @@ func (hvc *HyperVCmd) GetExternalOnlineVirtualSwitch() (string, error) {
 	return switchName, nil
 }
 
-func (hvc *HyperVCmd) CreateExternalVirtualSwitch(vmName string, switchName string) error {
+func (hvc *HypervRemote) CreateExternalVirtualSwitch(vmName string, switchName string) error {
 
 	var script = `
 [string]$vmName = $using:vmName
@@ -860,7 +959,7 @@ if($switch -ne $null) {
 	return err
 }
 
-func (hvc *HyperVCmd) GetVirtualMachineSwitchName(vmName string) (string, error) {
+func (hvc *HypervRemote) GetVirtualMachineSwitchName(vmName string) (string, error) {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -876,7 +975,7 @@ func (hvc *HyperVCmd) GetVirtualMachineSwitchName(vmName string) (string, error)
 	return strings.TrimSpace(cmdOut), nil
 }
 
-func (hvc *HyperVCmd) ConnectVirtualMachineNetworkAdapterToSwitch(vmName string, switchName string) error {
+func (hvc *HypervRemote) ConnectVirtualMachineNetworkAdapterToSwitch(vmName string, switchName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -889,7 +988,7 @@ Get-VMNetworkAdapter -VMName $vmName | Connect-VMNetworkAdapter -SwitchName $swi
 	return err
 }
 
-func (hvc *HyperVCmd) UntagVirtualMachineNetworkAdapterVlan(vmName string, switchName string) error {
+func (hvc *HypervRemote) UntagVirtualMachineNetworkAdapterVlan(vmName string, switchName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -903,7 +1002,7 @@ Set-VMNetworkAdapterVlan -ManagementOS -VMNetworkAdapterName $switchName -Untagg
 	return err
 }
 
-func (hvc *HyperVCmd) IsRunning(vmName string) (bool, error) {
+func (hvc *HypervRemote) IsRunning(vmName string) (bool, error) {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -922,7 +1021,7 @@ $vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Running
 	return isRunning, err
 }
 
-func (hvc *HyperVCmd) IsOff(vmName string) (bool, error) {
+func (hvc *HypervRemote) IsOff(vmName string) (bool, error) {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -941,7 +1040,7 @@ $vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Off
 	return isRunning, err
 }
 
-func (hvc *HyperVCmd) Uptime(vmName string) (uint64, error) {
+func (hvc *HypervRemote) Uptime(vmName string) (uint64, error) {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -959,7 +1058,7 @@ $vm.Uptime.TotalSeconds
 	return uptime, err
 }
 
-func (hvc *HyperVCmd) Mac(vmName string) (string, error) {
+func (hvc *HypervRemote) Mac(vmName string) (string, error) {
 	var script = `
 [string]$vmName = $using:vmName
 $adapterIndex = $using:adapterIndex
@@ -981,7 +1080,7 @@ $mac
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) IpAddress(mac string) (string, error) {
+func (hvc *HypervRemote) IpAddress(mac string) (string, error) {
 	var script = `
 	[string]$mac = $using:mac
 	[int]$addressIndex = $using:adapterIndex
@@ -1003,7 +1102,7 @@ $ip
 	return cmdOut, err
 }
 
-func (hvc *HyperVCmd) TurnOff(vmName string) error {
+func (hvc *HypervRemote) TurnOff(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -1017,7 +1116,7 @@ if ($vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Running) {
 	return err
 }
 
-func (hvc *HyperVCmd) ShutDown(vmName string) error {
+func (hvc *HypervRemote) ShutDown(vmName string) error {
 
 	var script = `
 	[string]$vmName = $using:vmName
@@ -1032,7 +1131,7 @@ if ($vm.State -eq [Microsoft.HyperV.PowerShell.VMState]::Running) {
 	return err
 }
 
-func (hvc *HyperVCmd) TypeScanCodes(vmName string, scanCodes string) error {
+func (hvc *HypervRemote) TypeScanCodes(vmName string, scanCodes string) error {
 	if len(scanCodes) == 0 {
 		return nil
 	}

@@ -17,45 +17,47 @@ const (
 	powerShellTrue  = "True"
 )
 
-type PowerShellCmd struct {
+type PSRemote struct {
 	UserName     string
 	Password     string
 	ComputerName string
 	paramSB      string
 	replaceParam string
+	UseSSL       bool
 	Stdout       io.Writer
 	Stderr       io.Writer
 }
 
-func NewPowerShellCmd(userName, password, computerName string) (*PowerShellCmd, error) {
+func NewPSRemote(userName, password, computerName string, useSSL bool) (*PSRemote, error) {
 
-	cmd := new(PowerShellCmd)
-	cmd.ComputerName = computerName
-	cmd.UserName = userName
-	cmd.Password = password
-	cmd.replaceParam = "'`n',\"`n\""
-	cmd.paramSB = `param([string]$paramsString)
+	psremote := new(PSRemote)
+	psremote.ComputerName = computerName
+	psremote.UserName = userName
+	psremote.Password = password
+	psremote.UseSSL = useSSL
+	psremote.replaceParam = "'`n',\"`n\""
+	psremote.paramSB = `param([string]$paramsString)
 	$paramsString = [Regex]::Escape($paramsString)
-	$params = ConvertFrom-StringData -StringData "$($paramsString  -replace` + cmd.replaceParam + `)"
+	$params = ConvertFrom-StringData -StringData "$($paramsString  -replace` + psremote.replaceParam + `)"
 	foreach ($param in $params.GetEnumerator()){
 		Set-Variable -Name $param.key -Value $param.value
 	}`
 
-	return cmd, nil
+	return psremote, nil
 }
 
-func (ps *PowerShellCmd) Run(scriptBlock string, params map[string]string) error {
+func (ps *PSRemote) Run(scriptBlock string, params map[string]string) error {
 	_, err := ps.Output(scriptBlock, params)
 	return err
 }
 
-func (ps *PowerShellCmd) RunWinRM(scriptBlock string, params map[string]string) error {
+func (ps *PSRemote) RunWinRM(scriptBlock string, params map[string]string) error {
 	_, err := ps.OutputWinRm(scriptBlock, params)
 	return err
 }
 
 // Output runs the PowerShell command and returns its standard output.
-func (ps *PowerShellCmd) Output(fileContents string, params map[string]string) (string, error) {
+func (ps *PSRemote) Output(fileContents string, params map[string]string) (string, error) {
 
 	fileContents = ps.paramSB + fileContents
 
@@ -124,7 +126,7 @@ func (ps *PowerShellCmd) Output(fileContents string, params map[string]string) (
 	return stdoutString, err
 }
 
-func (ps *PowerShellCmd) OutputWinRm(scriptBlock string, params map[string]string) (string, error) {
+func (ps *PSRemote) OutputWinRm(scriptBlock string, params map[string]string) (string, error) {
 
 	// Unable to escape back tick in Go
 	script := ""
@@ -135,6 +137,10 @@ func (ps *PowerShellCmd) OutputWinRm(scriptBlock string, params map[string]strin
 	} else {
 		script += `
 		Invoke-Command -Computername "` + ps.ComputerName + `" -scriptblock {` + scriptBlock + `}`
+	}
+
+	if ps.UseSSL {
+		script += ` -UseSSL`
 	}
 
 	stdoutString, err := ps.Output(script, params)
@@ -173,7 +179,7 @@ func IsPowershellAvailable() (bool, string, error) {
 	}
 }
 
-func (ps *PowerShellCmd) getPowerShellPath() (string, error) {
+func (ps *PSRemote) getPowerShellPath() (string, error) {
 	powershellAvailable, path, err := IsPowershellAvailable()
 
 	if !powershellAvailable {
@@ -213,7 +219,7 @@ func GetHostAvailableMemory() float64 {
 
 	var script = "(Get-WmiObject Win32_OperatingSystem).FreePhysicalMemory / 1024"
 
-	var ps PowerShellCmd
+	var ps PSRemote
 	output, _ := ps.Output(script, nil)
 
 	freeMB, _ := strconv.ParseFloat(output, 64)
@@ -235,7 +241,7 @@ try {
 `
 
 	//
-	var ps PowerShellCmd
+	var ps PSRemote
 	cmdOut, err := ps.Output(script, map[string]string{"ip": ip})
 	if err != nil {
 		return "", err
@@ -252,7 +258,7 @@ $administratorRole = [System.Security.Principal.WindowsBuiltInRole]::Administrat
 return $principal.IsInRole($administratorRole)
 `
 
-	var ps PowerShellCmd
+	var ps PSRemote
 	cmdOut, err := ps.Output(script, nil)
 	if err != nil {
 		return false, err
@@ -268,7 +274,7 @@ func ModuleExists(moduleName string) (bool, error) {
 param([string]$moduleName)
 (Get-Module -Name $moduleName) -ne $null
 `
-	var ps PowerShellCmd
+	var ps PSRemote
 	cmdOut, err := ps.Output(script, nil)
 	if err != nil {
 		return false, err
@@ -290,7 +296,7 @@ func HasVirtualMachineVirtualizationExtensions() (bool, error) {
 (GET-Command Set-VMProcessor).parameters.keys -contains "ExposeVirtualizationExtensions"
 `
 
-	var ps PowerShellCmd
+	var ps PSRemote
 	cmdOut, err := ps.Output(script, nil)
 
 	if err != nil {
@@ -327,7 +333,7 @@ $productKeyNode.InnerText = $productKey
 $unattend.Save($path)
 `
 
-	var ps PowerShellCmd
+	var ps PSRemote
 	err := ps.Run(script, map[string]string{"path": path, "productKey": productKey})
 	return err
 }
