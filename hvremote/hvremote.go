@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"common/psremote"
+	"github.com/nimerix/psremote"
 )
 
 type HypervRemote struct {
